@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="src/SwissKnife.Core/SwissKnife.Core.csproj" />
+  <Project Path="src/SwissKnife.Api/SwissKnife.Api.csproj" />
+  <Project Path="src/SwissKnife.Cli/SwissKnife.Cli.csproj" />
+  <Project Path="src/SwissKnife.Desktop/SwissKnife.Desktop.csproj" />
+</Solution>
