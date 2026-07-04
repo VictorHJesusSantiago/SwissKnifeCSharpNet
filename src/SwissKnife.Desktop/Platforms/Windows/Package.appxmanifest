@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:mp="http://schemas.microsoft.com/appx/2014/phone/manifest"
+  IgnorableNamespaces="uap mp">
+  <Identity Name="com.swissknife.snippets" Publisher="CN=SwissKnife" Version="1.0.0.0" />
+  <mp:PhoneIdentity PhoneProductId="5E128BDA-79AA-48B4-92F3-F36B423CEEC0" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
+  <Properties>
+    <DisplayName>SwissKnife Snippets</DisplayName>
+    <PublisherDisplayName>SwissKnife</PublisherDisplayName>
+    <Logo>appiconStoreLogo.png</Logo>
+  </Properties>
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.19041.0" />
+  </Dependencies>
+  <Resources><Resource Language="x-generate" /></Resources>
+  <Applications>
+    <Application Id="App" Executable="$targetnametoken$.exe" EntryPoint="$targetentrypoint$">
+      <uap:VisualElements
+        DisplayName="SwissKnife Snippets"
+        Description="Gerenciador pessoal de snippets"
+        Square150x150Logo="appiconMediumTile.png"
+        Square44x44Logo="appiconLogo.png"
+        BackgroundColor="transparent">
+        <uap:DefaultTile Square71x71Logo="appiconSmallTile.png" Wide310x150Logo="appiconWideTile.png" Square310x310Logo="appiconLargeTile.png" />
+        <uap:SplashScreen Image="splashScreen.png" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+  <Capabilities><Capability Name="internetClient" /></Capabilities>
+</Package>
