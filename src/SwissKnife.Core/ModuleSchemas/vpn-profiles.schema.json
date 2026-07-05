@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["provider"],
+  "properties": {
+    "provider": { "type": "string", "enum": ["openvpn", "wireguard"] },
+    "gateway": { "type": "string" },
+    "splitTunnel": { "type": "boolean" },
+    "sensitivity": { "type": "string", "enum": ["public", "internal", "confidential", "secret"] }
+  },
+  "additionalProperties": true
+}

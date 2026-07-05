@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["type", "priority"],
+  "properties": {
+    "type": { "type": "string", "enum": ["incident", "request", "problem", "change"] },
+    "priority": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+    "description": { "type": "string", "maxLength": 4000 },
+    "assignee": { "type": "string" }
+  },
+  "additionalProperties": true
+}
