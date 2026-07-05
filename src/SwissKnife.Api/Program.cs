@@ -1,24 +1,35 @@
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
 using SwissKnife.Api;
+using SwissKnife.Api.Endpoints;
 using SwissKnife.Core;
+using SwissKnife.Core.Persistence;
+using SwissKnife.Core.Tenancy;
 
 var builder = WebApplication.CreateBuilder(args);
-var dataDirectory = builder.Configuration["SwissKnife:DataDirectory"] ?? "data";
-var absoluteDataDirectory = Path.GetFullPath(dataDirectory, builder.Environment.ContentRootPath);
-var requestsPerMinute = builder.Configuration.GetValue("SwissKnife:RequestsPerMinute", 120);
 
-builder.Services.AddSingleton<IResourceStore>(new JsonResourceStore(Path.Combine(absoluteDataDirectory, "resources.json")));
-builder.Services.AddSingleton(new LogStore(Path.Combine(absoluteDataDirectory, "logs.ndjson")));
+// IMPORTANTE: nenhum caminho de dados é lido de builder.Configuration aqui, antes do
+// Build(). O WebApplicationFactory usado pelos testes de integração só injeta overrides de
+// configuração no momento do Build() (via um host builder adiado); ler valores antes disso
+// captura um snapshot que ignora esses overrides. Por isso os diretórios ficam em
+// SwissKnifePaths, resolvido lazily pela DI (sempre depois do Build()).
+builder.Services.AddSwissKnifeCore();
+builder.Services.AddSingleton(sp => new LogStore(Path.Combine(sp.GetRequiredService<SwissKnife.Core.SwissKnifePaths>().DataDirectory, "logs.ndjson")));
+
+// O rate limiter roda ANTES da autenticação (protege também endpoints anônimos), então
+// ainda não há ITenantContext resolvido neste ponto do pipeline; a partição usa o header
+// X-Api-Key como aproximação (ainda não validado) com fallback por IP. O isolamento de
+// dados por tenant em si é sempre imposto depois, pelo TenantResolutionMiddleware.
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
         RateLimitPartition.GetFixedWindowLimiter(
-            context.Request.Headers["X-Tenant-Id"].FirstOrDefault() ?? context.Connection.RemoteIpAddress?.ToString() ?? "anonymous",
+            context.Request.Headers["X-Api-Key"].FirstOrDefault() ?? context.Connection.RemoteIpAddress?.ToString() ?? "anonymous",
             _ => new FixedWindowRateLimiterOptions
             {
-                PermitLimit = requestsPerMinute,
+                PermitLimit = context.RequestServices.GetRequiredService<IConfiguration>().GetValue("SwissKnife:RequestsPerMinute", 120),
                 Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0,
                 AutoReplenishment = true
@@ -26,9 +37,18 @@ builder.Services.AddRateLimiter(options =>
 });
 
 var app = builder.Build();
+
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<SwissKnifeDbContext>();
+    await db.Database.MigrateAsync();
+}
+
 app.UseMiddleware<ErrorHandlingMiddleware>();
 app.UseRateLimiter();
 app.UseMiddleware<ApiKeyMiddleware>();
+app.UseMiddleware<TenantResolutionMiddleware>();
+app.UseMiddleware<IdempotencyMiddleware>();
 
 app.MapGet("/", () => Results.Ok(new
 {
@@ -43,19 +63,8 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = Dat
 var api = app.MapGroup("/api");
 api.MapGet("/modules", () => ModuleCatalog.All);
 
-api.MapGet("/resources", async (string? module, string? tenant, IResourceStore store, CancellationToken ct) =>
-    Results.Ok(await store.ListAsync(module, tenant, ct)));
-api.MapGet("/resources/{id:guid}", async (Guid id, IResourceStore store, CancellationToken ct) =>
-    await store.GetAsync(id, ct) is { } item ? Results.Ok(item) : Results.NotFound());
-api.MapPost("/resources", async (CreateResource request, IResourceStore store, CancellationToken ct) =>
-{
-    var item = await store.CreateAsync(request, ct);
-    return Results.Created($"/api/resources/{item.Id}", item);
-});
-api.MapPut("/resources/{id:guid}", async (Guid id, CreateResource request, IResourceStore store, CancellationToken ct) =>
-    await store.UpdateAsync(id, request, ct) is { } item ? Results.Ok(item) : Results.NotFound());
-api.MapDelete("/resources/{id:guid}", async (Guid id, IResourceStore store, CancellationToken ct) =>
-    await store.DeleteAsync(id, ct) ? Results.NoContent() : Results.NotFound());
+ResourceEndpoints.Map(api);
+PlatformEndpoints.Map(api);
 
 api.MapPost("/ad/permissions/audit", (PermissionAuditRequest request) =>
     Results.Ok(AnalysisServices.AuditPermissions(request)));
@@ -69,27 +78,24 @@ api.MapPost("/database/queries/analyze", (QueryAnalysisRequest request) =>
     Results.Ok(AnalysisServices.AnalyzeQuery(request)));
 api.MapPost("/database/schemas/compare", (SchemaComparisonRequest request) =>
     Results.Ok(AnalysisServices.CompareSchemas(request)));
-api.MapPost("/pki/certificates", async (CertificateIssueRequest request, IResourceStore store, CancellationToken ct) =>
+
+api.MapPost("/pki/certificates", async (CertificateIssueRequest request, SwissKnife.Core.Repositories.ResourceRepository resources, CancellationToken ct) =>
 {
     var certificate = AnalysisServices.IssueCertificate(request);
-    await store.CreateAsync(new(
+    await resources.CreateAsync(new(
         "pki",
         request.CommonName,
-        Status: "issued",
-        Data: new()
-        {
-            ["serialNumber"] = certificate.SerialNumber,
-            ["notAfter"] = certificate.NotAfter.ToString("O")
-        }), ct);
+        "issued",
+        System.Text.Json.JsonSerializer.Serialize(new { serialNumber = certificate.SerialNumber, notAfter = certificate.NotAfter.ToString("O") })), ct);
     return Results.Created($"/api/pki/certificates/{certificate.SerialNumber}", certificate);
 });
-api.MapPost("/pki/certificates/{serial}/revoke", async (string serial, IResourceStore store, CancellationToken ct) =>
+api.MapPost("/pki/certificates/{serial}/revoke", async (string serial, SwissKnife.Core.Repositories.ResourceRepository resources, CancellationToken ct) =>
 {
-    var revocation = await store.CreateAsync(new(
+    var revocation = await resources.CreateAsync(new(
         "pki",
         serial,
-        Status: "revoked",
-        Data: new() { ["revokedAt"] = DateTimeOffset.UtcNow.ToString("O") }), ct);
+        "revoked",
+        System.Text.Json.JsonSerializer.Serialize(new { revokedAt = DateTimeOffset.UtcNow.ToString("O") })), ct);
     return Results.Ok(revocation);
 });
 api.MapGet("/dotnet/profiler/snapshot", AnalysisServices.GetRuntimeMetrics);
