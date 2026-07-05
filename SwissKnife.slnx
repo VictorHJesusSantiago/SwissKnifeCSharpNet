@@ -1,5 +1,10 @@
 <Solution>
   <Project Path="src/SwissKnife.Core/SwissKnife.Core.csproj" />
+  <Folder Name="/src/" />
+  <Folder Name="/tests/">
+    <Project Path="tests/SwissKnife.Api.Tests/SwissKnife.Api.Tests.csproj" />
+    <Project Path="tests/SwissKnife.Core.Tests/SwissKnife.Core.Tests.csproj" />
+  </Folder>
   <Project Path="src/SwissKnife.Api/SwissKnife.Api.csproj" />
   <Project Path="src/SwissKnife.Cli/SwissKnife.Cli.csproj" />
   <Project Path="src/SwissKnife.Desktop/SwissKnife.Desktop.csproj" />
