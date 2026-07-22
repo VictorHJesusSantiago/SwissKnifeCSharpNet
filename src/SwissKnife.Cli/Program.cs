@@ -23,10 +23,24 @@ var offlineFileOption = new Option<FileInfo?>("--offline-file")
     Description = "[legado/somente leitura] Lê um resources.json antigo em vez de falar com a API.",
     Recursive = true
 };
+// CLI-006: formato de saída uniforme para todos os comandos que imprimem dados da API.
+var outputOption = new Option<OutputFormat>("--output")
+{
+    Description = "Formato de saída: table, json, yaml, csv ou ndjson.",
+    DefaultValueFactory = _ => OutputFormat.Table,
+    Recursive = true
+};
+// CLI-008: modo silencioso/verboso.
+var quietOption = new Option<bool>("--quiet") { Description = "Suprime mensagens informativas.", Recursive = true };
+var verboseOption = new Option<bool>("--verbose") { Description = "Exibe detalhes adicionais (URLs chamadas, etc.).", Recursive = true };
+// CLI-009: confirmação automática para uso em scripts/CI.
+var yesOption = new Option<bool>("--yes") { Description = "Confirma automaticamente ações destrutivas, sem prompt interativo.", Recursive = true };
+// CLI-011: dry-run para comandos mutáveis.
+var dryRunOption = new Option<bool>("--dry-run") { Description = "Mostra o que seria feito, sem executar a chamada mutável.", Recursive = true };
 
 var root = new RootCommand("SwissKnife: CLI unificada para operações, cloud e plataforma.")
 {
-    Options = { baseUrlOption, apiKeyOption, offlineFileOption }
+    Options = { baseUrlOption, apiKeyOption, offlineFileOption, outputOption, quietOption, verboseOption, yesOption, dryRunOption }
 };
 
 ApiClient Client(System.CommandLine.ParseResult parse)
@@ -34,10 +48,32 @@ ApiClient Client(System.CommandLine.ParseResult parse)
     var apiKey = parse.GetValue(apiKeyOption);
     if (string.IsNullOrWhiteSpace(apiKey))
         throw new ArgumentException("Informe --api-key ou defina SWISSKNIFE_API_KEY.");
-    return new ApiClient(parse.GetValue(baseUrlOption)!, apiKey);
+    var baseUrl = parse.GetValue(baseUrlOption)!;
+    // CLI-008/CLI-022: modo verboso mostra a URL chamada, mas NUNCA a chave (mascarada),
+    // para não vazar segredos em logs de terminal/CI.
+    if (parse.GetValue(verboseOption))
+        Console.Error.WriteLine($"[verbose] base-url={baseUrl} api-key={MaskSecret(apiKey)}");
+    return new ApiClient(baseUrl, apiKey);
 }
 
-void PrintJson(JsonDocument document) => Console.WriteLine(JsonSerializer.Serialize(document.RootElement, JsonDefaults.Options));
+static string MaskSecret(string value) => value.Length <= 8 ? "***" : $"{value[..4]}...{value[^4..]}";
+
+void PrintJson(System.CommandLine.ParseResult parse, JsonDocument document) =>
+    OutputFormatter.Print(document.RootElement, parse.GetValue(outputOption));
+
+// CLI-009/010: pede confirmação antes de ações destrutivas, a menos que --yes tenha sido passado.
+bool ConfirmDestructive(System.CommandLine.ParseResult parse, string message)
+{
+    if (parse.GetValue(yesOption)) return true;
+    if (!parse.GetValue(quietOption)) Console.Write($"{message} [y/N] ");
+    var answer = Console.ReadLine();
+    return answer?.Trim().Equals("y", StringComparison.OrdinalIgnoreCase) == true;
+}
+
+void Info(System.CommandLine.ParseResult parse, string message)
+{
+    if (!parse.GetValue(quietOption)) Console.Error.WriteLine(message);
+}
 
 var modules = new Command("modules", "Lista todos os módulos disponíveis.");
 modules.SetAction(_ =>
@@ -64,7 +100,7 @@ list.SetAction(parse =>
         ("status", parse.GetValue(listStatus)),
         ("text", parse.GetValue(listText)),
         ("cursor", parse.GetValue(listCursor)));
-    PrintJson(client.GetAsync($"/api/resources{query}").GetAwaiter().GetResult());
+    PrintJson(parse, client.GetAsync($"/api/resources{query}").GetAwaiter().GetResult());
 });
 
 var get = new Command("get", "Obtém um recurso por id.");
@@ -73,7 +109,7 @@ get.Arguments.Add(getId);
 get.SetAction(parse =>
 {
     using var client = Client(parse);
-    PrintJson(client.GetAsync($"/api/resources/{parse.GetValue(getId)}").GetAwaiter().GetResult());
+    PrintJson(parse, client.GetAsync($"/api/resources/{parse.GetValue(getId)}").GetAwaiter().GetResult());
 });
 
 var add = new Command("add", "Cria um recurso.");
@@ -86,9 +122,15 @@ add.Options.Add(addModule); add.Options.Add(addName); add.Options.Add(addStatus)
 add.SetAction(parse =>
 {
     var values = (parse.GetValue(addValues) ?? []).Select(ParsePair).ToDictionary(x => x.Key, x => (object?)x.Value, StringComparer.OrdinalIgnoreCase);
-    using var client = Client(parse);
     var body = new { Module = parse.GetValue(addModule), Name = parse.GetValue(addName), Status = parse.GetValue(addStatus), Data = values };
-    PrintJson(client.SendJsonAsync(HttpMethod.Post, "/api/resources", body, parse.GetValue(addIdempotencyKey)).GetAwaiter().GetResult());
+    if (parse.GetValue(dryRunOption))
+    {
+        Info(parse, "[dry-run] POST /api/resources não foi enviado. Corpo que seria enviado:");
+        Console.WriteLine(JsonSerializer.Serialize(body, JsonDefaults.Options));
+        return;
+    }
+    using var client = Client(parse);
+    PrintJson(parse, client.SendJsonAsync(HttpMethod.Post, "/api/resources", body, parse.GetValue(addIdempotencyKey)).GetAwaiter().GetResult());
 });
 
 var update = new Command("update", "Atualiza um recurso existente (requer o ETag atual).");
@@ -102,11 +144,19 @@ update.Options.Add(updateName); update.Options.Add(updateStatus); update.Options
 update.SetAction(parse =>
 {
     var values = (parse.GetValue(updateValues) ?? []).Select(ParsePair).ToDictionary(x => x.Key, x => (object?)x.Value, StringComparer.OrdinalIgnoreCase);
-    using var client = Client(parse);
     var body = new { Module = "", Name = parse.GetValue(updateName), Status = parse.GetValue(updateStatus), Data = values };
-    using var request = new HttpRequestMessage(HttpMethod.Put, $"/api/resources/{parse.GetValue(updateId)}");
-    request.Headers.TryAddWithoutValidation("If-Match", $"\"{parse.GetValue(updateEtag)}\"");
-    PrintJson(client.SendJsonAsync(HttpMethod.Put, $"/api/resources/{parse.GetValue(updateId)}", body).GetAwaiter().GetResult());
+    if (parse.GetValue(dryRunOption))
+    {
+        Info(parse, $"[dry-run] PUT /api/resources/{parse.GetValue(updateId)} não foi enviado. Corpo que seria enviado:");
+        Console.WriteLine(JsonSerializer.Serialize(body, JsonDefaults.Options));
+        return;
+    }
+    using var client = Client(parse);
+    PrintJson(parse, client.SendJsonAsync(
+        HttpMethod.Put,
+        $"/api/resources/{parse.GetValue(updateId)}",
+        body,
+        ifMatch: parse.GetValue(updateEtag)).GetAwaiter().GetResult());
 });
 
 var delete = new Command("delete", "Exclui (soft-delete) um recurso.");
@@ -114,10 +164,45 @@ var deleteId = new Argument<Guid>("id");
 delete.Arguments.Add(deleteId);
 delete.SetAction(parse =>
 {
+    var id = parse.GetValue(deleteId);
+    if (parse.GetValue(dryRunOption))
+    {
+        Info(parse, $"[dry-run] DELETE /api/resources/{id} não foi enviado.");
+        return 0;
+    }
+    if (!ConfirmDestructive(parse, $"Confirma mover o recurso {id} para a lixeira?"))
+    {
+        Info(parse, "Operação cancelada.");
+        return 3;
+    }
     using var client = Client(parse);
-    var removed = client.DeleteAsync($"/api/resources/{parse.GetValue(deleteId)}").GetAwaiter().GetResult();
+    var removed = client.DeleteAsync($"/api/resources/{id}").GetAwaiter().GetResult();
     Console.WriteLine(removed ? "Recurso movido para a lixeira." : "Recurso não encontrado.");
     return removed ? 0 : 2;
+});
+
+// CLI-012/018: operações em lote via arquivo, e import/export (chama a API, que já cobre
+// idempotência via chave externa — ver FND-021/023).
+var import = new Command("import", "Importa recursos de um arquivo CSV/JSON/YAML (via API).");
+var importModule = new Option<string>("--module") { Required = true };
+var importFormat = new Option<SwissKnife.Core.Entities.ImportFormat>("--format") { Required = true };
+var importFile = new Option<FileInfo>("--file") { Required = true };
+import.Options.Add(importModule); import.Options.Add(importFormat); import.Options.Add(importFile);
+import.SetAction(parse =>
+{
+    using var client = Client(parse);
+    using var stream = parse.GetValue(importFile)!.OpenRead();
+    PrintJson(parse, client.PostFileAsync($"/api/import-export/{parse.GetValue(importModule)}/import?format={parse.GetValue(importFormat)}", stream, parse.GetValue(importFile)!.Name).GetAwaiter().GetResult());
+});
+
+var export = new Command("export", "Exporta recursos de um módulo para CSV/JSON/YAML (via API).");
+var exportModule = new Option<string>("--module") { Required = true };
+var exportFormat = new Option<SwissKnife.Core.Entities.ImportFormat>("--format") { Required = true };
+export.Options.Add(exportModule); export.Options.Add(exportFormat);
+export.SetAction(parse =>
+{
+    using var client = Client(parse);
+    Console.WriteLine(client.GetTextAsync($"/api/import-export/{parse.GetValue(exportModule)}/export?format={parse.GetValue(exportFormat)}").GetAwaiter().GetResult());
 });
 
 resource.Subcommands.Add(list);
@@ -125,12 +210,14 @@ resource.Subcommands.Add(get);
 resource.Subcommands.Add(add);
 resource.Subcommands.Add(update);
 resource.Subcommands.Add(delete);
+resource.Subcommands.Add(import);
+resource.Subcommands.Add(export);
 root.Subcommands.Add(resource);
 
 // ---- tenant ----
 var tenant = new Command("tenant", "Administração de tenants (requer escopo platform:admin).");
 var tenantList = new Command("list", "Lista tenants.");
-tenantList.SetAction(parse => { using var client = Client(parse); PrintJson(client.GetAsync("/api/tenants").GetAwaiter().GetResult()); });
+tenantList.SetAction(parse => { using var client = Client(parse); PrintJson(parse, client.GetAsync("/api/tenants").GetAwaiter().GetResult()); });
 var tenantCreate = new Command("create", "Cria um tenant.");
 var tenantSlug = new Option<string>("--slug") { Required = true };
 var tenantDisplayName = new Option<string>("--display-name") { Required = true };
@@ -138,7 +225,7 @@ tenantCreate.Options.Add(tenantSlug); tenantCreate.Options.Add(tenantDisplayName
 tenantCreate.SetAction(parse =>
 {
     using var client = Client(parse);
-    PrintJson(client.SendJsonAsync(HttpMethod.Post, "/api/tenants", new { Slug = parse.GetValue(tenantSlug), DisplayName = parse.GetValue(tenantDisplayName) }).GetAwaiter().GetResult());
+    PrintJson(parse, client.SendJsonAsync(HttpMethod.Post, "/api/tenants", new { Slug = parse.GetValue(tenantSlug), DisplayName = parse.GetValue(tenantDisplayName) }).GetAwaiter().GetResult());
 });
 var tenantApiKey = new Command("issue-api-key", "Emite uma nova API key para um tenant.");
 var tenantIdArg = new Argument<Guid>("tenantId");
@@ -149,7 +236,7 @@ tenantApiKey.Options.Add(keyName); tenantApiKey.Options.Add(keyScopes);
 tenantApiKey.SetAction(parse =>
 {
     using var client = Client(parse);
-    PrintJson(client.SendJsonAsync(HttpMethod.Post, $"/api/tenants/{parse.GetValue(tenantIdArg)}/api-keys", new { Name = parse.GetValue(keyName), Scopes = parse.GetValue(keyScopes) }).GetAwaiter().GetResult());
+    PrintJson(parse, client.SendJsonAsync(HttpMethod.Post, $"/api/tenants/{parse.GetValue(tenantIdArg)}/api-keys", new { Name = parse.GetValue(keyName), Scopes = parse.GetValue(keyScopes) }).GetAwaiter().GetResult());
 });
 tenant.Subcommands.Add(tenantList);
 tenant.Subcommands.Add(tenantCreate);
@@ -165,12 +252,12 @@ jobEnqueue.Options.Add(jobKind); jobEnqueue.Options.Add(jobPayload);
 jobEnqueue.SetAction(parse =>
 {
     using var client = Client(parse);
-    PrintJson(client.SendJsonAsync(HttpMethod.Post, "/api/jobs", new { Kind = parse.GetValue(jobKind), PayloadJson = parse.GetValue(jobPayload) }).GetAwaiter().GetResult());
+    PrintJson(parse, client.SendJsonAsync(HttpMethod.Post, "/api/jobs", new { Kind = parse.GetValue(jobKind), PayloadJson = parse.GetValue(jobPayload) }).GetAwaiter().GetResult());
 });
 var jobStatus = new Command("status", "Consulta o status de um job.");
 var jobIdArg = new Argument<Guid>("id");
 jobStatus.Arguments.Add(jobIdArg);
-jobStatus.SetAction(parse => { using var client = Client(parse); PrintJson(client.GetAsync($"/api/jobs/{parse.GetValue(jobIdArg)}").GetAwaiter().GetResult()); });
+jobStatus.SetAction(parse => { using var client = Client(parse); PrintJson(parse, client.GetAsync($"/api/jobs/{parse.GetValue(jobIdArg)}").GetAwaiter().GetResult()); });
 var jobCancel = new Command("cancel", "Cancela um job em execução.");
 jobCancel.Arguments.Add(jobIdArg);
 jobCancel.SetAction(parse =>
@@ -179,10 +266,104 @@ jobCancel.SetAction(parse =>
     client.SendJsonAsync(HttpMethod.Post, $"/api/jobs/{parse.GetValue(jobIdArg)}/cancel", new { }).GetAwaiter().GetResult();
     Console.WriteLine("Cancelamento solicitado.");
 });
+// CLI-013/014: acompanhamento (watch/stream) de um job até que ele termine.
+var jobWatch = new Command("watch", "Acompanha um job até que ele conclua, falhe ou seja cancelado.");
+var jobWatchIntervalSeconds = new Option<int>("--interval-seconds") { DefaultValueFactory = _ => 2 };
+jobWatch.Arguments.Add(jobIdArg);
+jobWatch.Options.Add(jobWatchIntervalSeconds);
+jobWatch.SetAction(parse =>
+{
+    using var client = Client(parse);
+    var id = parse.GetValue(jobIdArg);
+    var interval = TimeSpan.FromSeconds(Math.Max(1, parse.GetValue(jobWatchIntervalSeconds)));
+    while (true)
+    {
+        var document = client.GetAsync($"/api/jobs/{id}").GetAwaiter().GetResult();
+        var status = document.RootElement.GetProperty("status").GetString();
+        Info(parse, $"job {id}: {status} ({document.RootElement.GetProperty("progressPercent").GetInt32()}%)");
+        if (status is "Succeeded" or "Failed" or "Cancelled")
+        {
+            PrintJson(parse, document);
+            return status == "Succeeded" ? 0 : 4;
+        }
+        Thread.Sleep(interval);
+    }
+});
+
 job.Subcommands.Add(jobEnqueue);
 job.Subcommands.Add(jobStatus);
 job.Subcommands.Add(jobCancel);
+job.Subcommands.Add(jobWatch);
 root.Subcommands.Add(job);
+
+var operationPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+{
+    ["vpn-audit"] = "/api/operations/vpn/audit",
+    ["cloud-audit"] = "/api/operations/cloud/audit",
+    ["gateway-validate"] = "/api/operations/gateway/validate",
+    ["gateway-select"] = "/api/operations/gateway/select-upstream",
+    ["webhook-validate"] = "/api/operations/webhooks/validate",
+    ["webhook-sign"] = "/api/operations/webhooks/sign",
+    ["webhook-verify"] = "/api/operations/webhooks/verify",
+    ["ephemeral-plan"] = "/api/operations/ephemeral-environments/plan",
+    ["capacity-analyze"] = "/api/operations/capacity/analyze",
+    ["on-call-schedule"] = "/api/operations/on-call/schedule",
+    ["self-service-evaluate"] = "/api/operations/self-service/evaluate",
+    ["dr-assess"] = "/api/operations/disaster-recovery/assess",
+    ["itam-financials"] = "/api/operations/itam/financials",
+    ["licenses-reconcile"] = "/api/operations/licenses/reconcile",
+    ["logs-validate-batch"] = "/api/operations/logs/validate-batch"
+};
+var operations = new Command("operations", "Executa análises e planejamentos tipados dos módulos operacionais.");
+var operationList = new Command("list", "Lista operações e endpoints disponíveis.");
+operationList.SetAction(_ =>
+{
+    foreach (var item in operationPaths.OrderBy(x => x.Key))
+        Console.WriteLine($"{item.Key,-24} {item.Value}");
+});
+var operationRun = new Command("run", "Executa uma operação usando um arquivo JSON como entrada.");
+var operationName = new Option<string>("--operation") { Required = true, Description = "Nome exibido por 'operations list'." };
+var operationFile = new Option<FileInfo>("--file") { Required = true, Description = "Arquivo JSON com o contrato da operação." };
+var operationPersist = new Option<bool>("--persist") { Description = "Persiste entrada, resultado e findings como recurso versionado." };
+var operationExecutionName = new Option<string?>("--name") { Description = "Nome do registro persistido; obrigatório com --persist." };
+operationRun.Options.Add(operationName);
+operationRun.Options.Add(operationFile);
+operationRun.Options.Add(operationPersist);
+operationRun.Options.Add(operationExecutionName);
+operationRun.SetAction(parse =>
+{
+    var name = parse.GetValue(operationName)!;
+    if (!operationPaths.TryGetValue(name, out var path))
+        throw new ArgumentException($"Operação desconhecida '{name}'. Use 'operations list'.");
+    var file = parse.GetValue(operationFile)!;
+    if (!file.Exists) throw new FileNotFoundException("Arquivo de entrada não encontrado.", file.FullName);
+    using var input = JsonDocument.Parse(File.ReadAllText(file.FullName));
+    if (parse.GetValue(dryRunOption))
+    {
+        Info(parse, $"[dry-run] POST {path} não foi enviado; JSON validado sintaticamente.");
+        return;
+    }
+    using var client = Client(parse);
+    if (parse.GetValue(operationPersist))
+    {
+        var executionName = parse.GetValue(operationExecutionName);
+        if (string.IsNullOrWhiteSpace(executionName))
+            throw new ArgumentException("Informe --name ao usar --persist.");
+        PrintJson(parse, client.SendJsonAsync(HttpMethod.Post, "/api/operations/executions", new
+        {
+            Operation = name,
+            Name = executionName,
+            Input = input.RootElement
+        }).GetAwaiter().GetResult());
+    }
+    else
+    {
+        PrintJson(parse, client.SendJsonAsync(HttpMethod.Post, path, input.RootElement).GetAwaiter().GetResult());
+    }
+});
+operations.Subcommands.Add(operationList);
+operations.Subcommands.Add(operationRun);
+root.Subcommands.Add(operations);
 
 // ---- cloud (inventário multi-cloud sobre o módulo multi-cloud) ----
 var cloud = new Command("cloud", "Inventário multi-cloud normalizado.");
@@ -194,7 +375,7 @@ cloudList.SetAction(parse =>
     using var client = Client(parse);
     var document = client.GetAsync("/api/resources?module=multi-cloud").GetAwaiter().GetResult();
     var selectedProvider = parse.GetValue(provider);
-    if (selectedProvider is null) { PrintJson(document); return; }
+    if (selectedProvider is null) { PrintJson(parse, document); return; }
     var filtered = document.RootElement.GetProperty("items").EnumerateArray()
         .Where(x => x.TryGetProperty("data", out var data) && data.TryGetProperty("provider", out var p) && p.GetString()?.Equals(selectedProvider, StringComparison.OrdinalIgnoreCase) == true);
     Console.WriteLine(JsonSerializer.Serialize(filtered, JsonDefaults.Options));
@@ -238,6 +419,43 @@ offlineList.SetAction(parse =>
 });
 offline.Subcommands.Add(offlineList);
 root.Subcommands.Add(offline);
+
+// CLI-025: diagnóstico de configuração, rede e credenciais.
+var doctor = new Command("doctor", "Verifica configuração, conectividade com a API e validade da credencial.");
+doctor.SetAction(parse =>
+{
+    var baseUrl = parse.GetValue(baseUrlOption);
+    var apiKey = parse.GetValue(apiKeyOption);
+    Console.WriteLine($"base-url: {baseUrl}");
+    Console.WriteLine($"api-key: {(string.IsNullOrWhiteSpace(apiKey) ? "NÃO CONFIGURADA (defina --api-key ou SWISSKNIFE_API_KEY)" : MaskSecret(apiKey))}");
+
+    using var http = new HttpClient { BaseAddress = new Uri(baseUrl!.TrimEnd('/') + "/") };
+    try
+    {
+        var health = http.GetAsync("health/live").GetAwaiter().GetResult();
+        Console.WriteLine(health.IsSuccessStatusCode ? "conectividade: OK (health/live respondeu)" : $"conectividade: FALHOU ({(int)health.StatusCode})");
+    }
+    catch (Exception exception)
+    {
+        Console.WriteLine($"conectividade: FALHOU ({exception.Message})");
+        return 1;
+    }
+
+    if (string.IsNullOrWhiteSpace(apiKey)) return 2;
+    try
+    {
+        using var client = new ApiClient(baseUrl, apiKey);
+        client.GetAsync("/api/modules").GetAwaiter().GetResult();
+        Console.WriteLine("credencial: OK (X-Api-Key aceita pela API)");
+        return 0;
+    }
+    catch (Exception exception)
+    {
+        Console.WriteLine($"credencial: FALHOU ({exception.Message})");
+        return 3;
+    }
+});
+root.Subcommands.Add(doctor);
 
 try
 {
