@@ -104,7 +104,12 @@ public sealed record SchemaTable(string Name, IReadOnlyList<SchemaColumn> Column
 public sealed record SchemaComparisonRequest(IReadOnlyList<SchemaTable> Source, IReadOnlyList<SchemaTable> Target);
 public sealed record SchemaDifference(string Kind, string Object, string Detail);
 
-public sealed record CertificateIssueRequest(string CommonName, int ValidDays = 365);
+public sealed record CertificateIssueRequest(
+    string CommonName,
+    int ValidDays = 365,
+    IReadOnlyList<string>? DnsNames = null,
+    IReadOnlyList<string>? IpAddresses = null,
+    string Profile = "server");
 public sealed record IssuedCertificate(string SerialNumber, string CommonName, DateTimeOffset NotAfter, string CertificatePem);
 
 public sealed record LogEntry(
