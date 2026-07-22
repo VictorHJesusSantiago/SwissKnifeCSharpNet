@@ -14,6 +14,8 @@ using YamlDotNet.Serialization.NamingConventions;
 namespace SwissKnife.Core.ImportExport;
 
 public sealed record ImportRow(string Name, string Status, string PayloadJson, string? ExternalKey);
+public sealed record ImportPreviewItem(int RowNumber, ImportRow Row, IReadOnlyList<string> Errors);
+public sealed record ImportPreview(int TotalRows, int ValidRows, int InvalidRows, IReadOnlyList<ImportPreviewItem> Items);
 
 /// <summary>
 /// FND-021/022/023: importação/exportação CSV/JSON/YAML com idempotência via chave externa
@@ -24,19 +26,32 @@ public sealed class ImportExportService(SwissKnifeDbContext db, ResourceReposito
     private const string ExternalKeySource = "import";
     private Guid TenantId => tenantAccessor.Current.TenantId;
 
+    public async Task<ImportPreview> PreviewAsync(string module, ImportFormat format, Stream content, CancellationToken cancellationToken = default)
+    {
+        if (!ModuleCatalog.Exists(module))
+            throw new ArgumentException($"Módulo desconhecido: {module}.");
+        using var reader = new StreamReader(content);
+        var rows = Parse(format, await reader.ReadToEndAsync(cancellationToken));
+        var items = rows.Select((row, index) =>
+        {
+            var errors = new List<string>();
+            if (string.IsNullOrWhiteSpace(row.Name)) errors.Add("Nome é obrigatório.");
+            errors.AddRange(Schema.ModuleSchemaRegistry.Validate(module, row.PayloadJson));
+            return new ImportPreviewItem(index + 1, row, errors);
+        }).ToArray();
+        return new ImportPreview(items.Length, items.Count(x => x.Errors.Count == 0),
+            items.Count(x => x.Errors.Count > 0), items);
+    }
+
     public async Task<ImportJob> ImportAsync(string module, ImportFormat format, Stream content, CancellationToken cancellationToken = default)
     {
         using var reader = new StreamReader(content);
         var text = await reader.ReadToEndAsync(cancellationToken);
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
 
-        var rows = format switch
-        {
-            ImportFormat.Csv => ParseCsv(text),
-            ImportFormat.Json => ParseJson(text),
-            ImportFormat.Yaml => ParseYaml(text),
-            _ => throw new ArgumentOutOfRangeException(nameof(format))
-        };
+        if (!ModuleCatalog.Exists(module))
+            throw new ArgumentException($"Módulo desconhecido: {module}.");
+        var rows = Parse(format, text);
 
         var job = new ImportJob { TenantId = TenantId, Module = module, Format = format, SourceFileHash = hash, TotalRows = rows.Count };
         db.ImportJobs.Add(job);
@@ -69,6 +84,25 @@ public sealed class ImportExportService(SwissKnifeDbContext db, ResourceReposito
         await db.SaveChangesAsync(cancellationToken);
         return job;
     }
+
+    public async Task<(ImportJob Job, IReadOnlyList<ImportConflict> Conflicts)?> GetReportAsync(
+        Guid jobId, CancellationToken cancellationToken = default)
+    {
+        var job = await db.ImportJobs.AsNoTracking()
+            .FirstOrDefaultAsync(x => x.Id == jobId && x.TenantId == TenantId, cancellationToken);
+        if (job is null) return null;
+        var conflicts = await db.ImportConflicts.AsNoTracking()
+            .Where(x => x.ImportJobId == jobId).OrderBy(x => x.RowNumber).ToListAsync(cancellationToken);
+        return (job, conflicts);
+    }
+
+    private static List<ImportRow> Parse(ImportFormat format, string text) => format switch
+    {
+        ImportFormat.Csv => ParseCsv(text),
+        ImportFormat.Json => ParseJson(text),
+        ImportFormat.Yaml => ParseYaml(text),
+        _ => throw new ArgumentOutOfRangeException(nameof(format))
+    };
 
     private async Task ImportRowAsync(string module, ImportRow row, Guid jobId, int rowNumber, CancellationToken cancellationToken)
     {
