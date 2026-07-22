@@ -42,6 +42,21 @@ public sealed class SwissKnifeDbContext(DbContextOptions<SwissKnifeDbContext> op
     public DbSet<SecretReferenceEntity> SecretReferences => Set<SecretReferenceEntity>();
     public DbSet<BackupRecord> BackupRecords => Set<BackupRecord>();
 
+    public DbSet<RefreshTokenEntity> RefreshTokens => Set<RefreshTokenEntity>();
+    public DbSet<TemporaryElevationEntity> TemporaryElevations => Set<TemporaryElevationEntity>();
+    public DbSet<AuditLogEntry> AuditLogEntries => Set<AuditLogEntry>();
+    public DbSet<FeatureFlagEntity> FeatureFlags => Set<FeatureFlagEntity>();
+    public DbSet<DynamicConfigEntity> DynamicConfigs => Set<DynamicConfigEntity>();
+    public DbSet<DynamicConfigHistoryEntry> DynamicConfigHistory => Set<DynamicConfigHistoryEntry>();
+
+    public DbSet<TicketEntity> Tickets => Set<TicketEntity>();
+    public DbSet<TicketWatcher> TicketWatchers => Set<TicketWatcher>();
+    public DbSet<TicketComment> TicketComments => Set<TicketComment>();
+    public DbSet<TicketRelationship> TicketRelationships => Set<TicketRelationship>();
+    public DbSet<TicketSlaPolicy> TicketSlaPolicies => Set<TicketSlaPolicy>();
+    public DbSet<TicketNumberSequence> TicketNumberSequences => Set<TicketNumberSequence>();
+    public DbSet<FindingEntity> Findings => Set<FindingEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Tenant>(b =>
@@ -98,6 +113,42 @@ public sealed class SwissKnifeDbContext(DbContextOptions<SwissKnifeDbContext> op
         modelBuilder.Entity<IdempotencyKeyEntity>(b => b.HasKey(x => x.Key));
 
         modelBuilder.Entity<OutboxMessageEntity>(b => b.HasIndex(x => x.ProcessedAt));
+
+        modelBuilder.Entity<UserEntity>(b => b.HasIndex(x => x.Email).IsUnique());
+        modelBuilder.Entity<RefreshTokenEntity>(b => b.HasIndex(x => x.TokenHash).IsUnique());
+        modelBuilder.Entity<FeatureFlagEntity>(b => b.HasIndex(x => new { x.Key, x.TenantId, x.Environment }).IsUnique());
+        modelBuilder.Entity<DynamicConfigEntity>(b => b.HasIndex(x => new { x.Key, x.TenantId }).IsUnique());
+        modelBuilder.Entity<AuditLogEntry>(b => b.HasIndex(x => new { x.TenantId, x.OccurredAt }));
+
+        modelBuilder.Entity<TicketEntity>(b =>
+        {
+            b.Property(x => x.Type).HasConversion<string>();
+            b.Property(x => x.Priority).HasConversion<string>();
+            b.Property(x => x.Impact).HasConversion<string>();
+            b.Property(x => x.Urgency).HasConversion<string>();
+            b.HasIndex(x => new { x.TenantId, x.Number }).IsUnique();
+            b.HasIndex(x => new { x.TenantId, x.Status });
+            b.HasIndex(x => new { x.TenantId, x.ResponseDueAt });
+            b.HasIndex(x => new { x.TenantId, x.ResolutionDueAt });
+            b.HasMany(x => x.Watchers).WithOne().HasForeignKey(x => x.TicketId).OnDelete(DeleteBehavior.Cascade);
+        });
+        modelBuilder.Entity<TicketRelationship>(b =>
+        {
+            b.Property(x => x.Type).HasConversion<string>();
+            b.HasIndex(x => new { x.SourceTicketId, x.TargetTicketId, x.Type }).IsUnique();
+        });
+        modelBuilder.Entity<TicketSlaPolicy>(b =>
+        {
+            b.Property(x => x.Priority).HasConversion<string>();
+            b.HasIndex(x => new { x.TenantId, x.Priority }).IsUnique();
+        });
+        modelBuilder.Entity<TicketNumberSequence>(b => b.HasKey(x => x.TenantId));
+        modelBuilder.Entity<FindingEntity>(b =>
+        {
+            b.Property(x => x.Status).HasConversion<string>();
+            b.HasIndex(x => new { x.TenantId, x.Fingerprint }).IsUnique();
+            b.HasIndex(x => new { x.TenantId, x.Module, x.Status, x.Severity });
+        });
 
         // FND-010/031: filtro global de soft-delete. Isolamento por tenant é aplicado
         // explicitamente nos repositórios (via ITenantContext), não como filtro global,
