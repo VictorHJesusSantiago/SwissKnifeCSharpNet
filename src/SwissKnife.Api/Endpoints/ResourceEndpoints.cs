@@ -2,6 +2,7 @@ using System.Text.Json;
 using SwissKnife.Core;
 using SwissKnife.Core.Entities;
 using SwissKnife.Core.Repositories;
+using SwissKnife.Core.Schema;
 using SwissKnife.Core.Search;
 using SwissKnife.Core.Security;
 using SwissKnife.Core.Tenancy;
@@ -21,12 +22,18 @@ public static class ResourceEndpoints
 {
     public static void Map(RouteGroupBuilder api)
     {
-        api.MapGet("/resources", async (string? module, string? status, string? tag, string? text, string? cursor, int? pageSize, ResourceRepository repository, PayloadProtector protector, ITenantContext tenant, CancellationToken ct) =>
+        api.MapGet("/modules/{module}/schema", (string module) =>
+            Results.Text(ModuleSchemaRegistry.GetSchemaText(module), "application/schema+json"));
+
+        api.MapGet("/resources", async (string? module, string? status, string? tag, string? text,
+            Guid? ownerUserId, bool? includeDeleted, string? cursor, int? pageSize,
+            ResourceRepository repository, PayloadProtector protector, ITenantContext tenant, CancellationToken ct) =>
         {
             // Parâmetros de query vazios ("?status=") são tratados como ausentes, não como
             // filtro literal por string vazia — evita zerar listagens por engano de cliente.
             var filter = new ResourceFilter(
-                NullIfEmpty(module), NullIfEmpty(status), NullIfEmpty(tag), NullIfEmpty(text));
+                NullIfEmpty(module), NullIfEmpty(status), NullIfEmpty(tag), NullIfEmpty(text),
+                ownerUserId, includeDeleted ?? false);
             var page = await repository.ListAsync(filter, NullIfEmpty(cursor), pageSize ?? 25, ct);
             var items = page.Items.Select(x => ToResponse(x, protector, tenant));
             return Results.Ok(new { items, page.NextCursor, page.HasMore });
@@ -39,25 +46,32 @@ public static class ResourceEndpoints
         {
             var item = await repository.GetAsync(id, ct);
             if (item is null) return Results.NotFound();
-            http.Response.Headers.ETag = $"\"{item.ConcurrencyStamp}\"";
+            var etag = $"\"{item.ConcurrencyStamp}\"";
+            http.Response.Headers.ETag = etag;
+            if (http.Request.Headers.IfNoneMatch.Any(x => x == "*" || x == etag))
+                return Results.StatusCode(StatusCodes.Status304NotModified);
             return Results.Ok(ToResponse(item, protector, tenant));
         });
 
-        api.MapPost("/resources", async (ResourceUpsertRequest request, ResourceRepository repository, CancellationToken ct) =>
+        api.MapPost("/resources", async (ResourceUpsertRequest request, HttpContext http, ResourceRepository repository, CancellationToken ct) =>
         {
             var payload = JsonSerializer.Serialize(request.Data ?? new Dictionary<string, object?>());
             var created = await repository.CreateAsync(new CreateResourceCommand(
                 request.Module, request.Name, request.Status, payload, request.Tags, request.OwnerUserId, CostCenter: request.CostCenter), ct);
+            http.Response.Headers.ETag = $"\"{created.ConcurrencyStamp}\"";
             return Results.Created($"/api/resources/{created.Id}", created);
         });
 
         api.MapPut("/resources/{id:guid}", async (Guid id, ResourceUpsertRequest request, HttpContext http, ResourceRepository repository, CancellationToken ct) =>
         {
-            var expectedStamp = http.Request.Headers.IfMatch.FirstOrDefault()?.Trim('"')
-                ?? (await repository.GetAsync(id, ct))?.ConcurrencyStamp
-                ?? throw new KeyNotFoundException($"Recurso {id} não encontrado.");
+            var ifMatch = http.Request.Headers.IfMatch.FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(ifMatch))
+                return Results.Problem(statusCode: StatusCodes.Status428PreconditionRequired,
+                    title: "Pré-condição obrigatória", detail: "Informe o ETag atual no header If-Match.");
+            var expectedStamp = ifMatch.Trim().Trim('"');
             var payload = JsonSerializer.Serialize(request.Data ?? new Dictionary<string, object?>());
             var updated = await repository.UpdateAsync(id, new UpdateResourceCommand(request.Name, request.Status, payload, expectedStamp, request.Tags, request.OwnerUserId, request.CostCenter), ct);
+            http.Response.Headers.ETag = $"\"{updated.ConcurrencyStamp}\"";
             return Results.Ok(updated);
         });
 
