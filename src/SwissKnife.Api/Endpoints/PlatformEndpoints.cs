@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using SwissKnife.Api;
+using SwissKnife.Core.Auditing;
 using SwissKnife.Core.Backup;
 using SwissKnife.Core.Entities;
 using SwissKnife.Core.ImportExport;
@@ -37,12 +38,24 @@ public static class PlatformEndpoints
         admin.MapGet("/", async (TenantService tenants, CancellationToken ct) => Results.Ok(await tenants.ListAsync(ct)));
         admin.MapPost("/", async (CreateTenantRequest request, TenantService tenants, CancellationToken ct) =>
             Results.Created("/api/tenants", await tenants.CreateAsync(request.Slug, request.DisplayName, ct)));
-        admin.MapPost("/{tenantId:guid}/suspend", async (Guid tenantId, TenantService tenants, CancellationToken ct) =>
-            await tenants.SuspendAsync(tenantId, ct) ? Results.NoContent() : Results.NotFound());
-        admin.MapPost("/{tenantId:guid}/reactivate", async (Guid tenantId, TenantService tenants, CancellationToken ct) =>
-            await tenants.ReactivateAsync(tenantId, ct) ? Results.NoContent() : Results.NotFound());
-        admin.MapDelete("/{tenantId:guid}", async (Guid tenantId, TenantService tenants, CancellationToken ct) =>
-            await tenants.DeleteAsync(tenantId, ct) ? Results.NoContent() : Results.NotFound());
+        admin.MapPost("/{tenantId:guid}/suspend", async (Guid tenantId, TenantService tenants, AuditLogger audit, ITenantContext actor, CancellationToken ct) =>
+        {
+            var ok = await tenants.SuspendAsync(tenantId, ct);
+            if (ok) await audit.LogAsync(tenantId, actor.ActorName, "tenant.suspended", "Tenant", tenantId.ToString(), cancellationToken: ct);
+            return ok ? Results.NoContent() : Results.NotFound();
+        });
+        admin.MapPost("/{tenantId:guid}/reactivate", async (Guid tenantId, TenantService tenants, AuditLogger audit, ITenantContext actor, CancellationToken ct) =>
+        {
+            var ok = await tenants.ReactivateAsync(tenantId, ct);
+            if (ok) await audit.LogAsync(tenantId, actor.ActorName, "tenant.reactivated", "Tenant", tenantId.ToString(), cancellationToken: ct);
+            return ok ? Results.NoContent() : Results.NotFound();
+        });
+        admin.MapDelete("/{tenantId:guid}", async (Guid tenantId, TenantService tenants, AuditLogger audit, ITenantContext actor, CancellationToken ct) =>
+        {
+            var ok = await tenants.DeleteAsync(tenantId, ct);
+            if (ok) await audit.LogAsync(tenantId, actor.ActorName, "tenant.deleted", "Tenant", tenantId.ToString(), cancellationToken: ct);
+            return ok ? Results.NoContent() : Results.NotFound();
+        });
 
         admin.MapPost("/{tenantId:guid}/limits", async (Guid tenantId, SetLimitRequest request, TenantService tenants, CancellationToken ct) =>
         {
@@ -60,13 +73,18 @@ public static class PlatformEndpoints
         admin.MapGet("/{tenantId:guid}/org-units", async (Guid tenantId, TenantService tenants, CancellationToken ct) =>
             Results.Ok(await tenants.ListOrgUnitsAsync(tenantId, ct)));
 
-        admin.MapPost("/{tenantId:guid}/api-keys", async (Guid tenantId, IssueApiKeyRequest request, ApiKeyService keys, CancellationToken ct) =>
+        admin.MapPost("/{tenantId:guid}/api-keys", async (Guid tenantId, IssueApiKeyRequest request, ApiKeyService keys, AuditLogger audit, ITenantContext actor, CancellationToken ct) =>
         {
             var issued = await keys.IssueAsync(tenantId, request.Name, request.Scopes, request.ExpiresAt, ct);
+            await audit.LogAsync(tenantId, actor.ActorName, "apikey.issued", "ApiKey", issued.Id.ToString(), new { request.Name, request.Scopes }, cancellationToken: ct);
             return Results.Created($"/api/tenants/{tenantId}/api-keys", new { issued.Id, issued.PlainTextKey, issued.Prefix, warning = "Guarde esta chave agora: ela não será exibida novamente." });
         });
-        admin.MapDelete("/api-keys/{apiKeyId:guid}", async (Guid apiKeyId, ApiKeyService keys, CancellationToken ct) =>
-            await keys.RevokeAsync(apiKeyId, ct) ? Results.NoContent() : Results.NotFound());
+        admin.MapDelete("/api-keys/{apiKeyId:guid}", async (Guid apiKeyId, ApiKeyService keys, AuditLogger audit, ITenantContext actor, CancellationToken ct) =>
+        {
+            var revoked = await keys.RevokeAsync(apiKeyId, ct);
+            if (revoked) await audit.LogAsync(null, actor.ActorName, "apikey.revoked", "ApiKey", apiKeyId.ToString(), cancellationToken: ct);
+            return revoked ? Results.NoContent() : Results.NotFound();
+        });
     }
 
     private static void MapJobs(RouteGroupBuilder api)
@@ -121,11 +139,12 @@ public static class PlatformEndpoints
             Results.Created("/api/secrets", new { Id = await vault.StoreAsync(tenant.TenantId, request.Name, request.Value, ct) }));
         group.MapGet("/", async (ISecretVault vault, ITenantContext tenant, CancellationToken ct) =>
             Results.Ok(await vault.ListAsync(tenant.TenantId, ct)));
-        group.MapPost("/{id:guid}/reveal", async (Guid id, ISecretVault vault, ITenantContext tenant, CancellationToken ct) =>
+        group.MapPost("/{id:guid}/reveal", async (Guid id, ISecretVault vault, ITenantContext tenant, AuditLogger audit, CancellationToken ct) =>
         {
             if (!tenant.HasScope("data:reveal"))
                 return Results.Json(new { error = "Requer escopo data:reveal." }, statusCode: StatusCodes.Status403Forbidden);
             var value = await vault.RevealAsync(tenant.TenantId, id, ct);
+            await audit.LogAsync(tenant.TenantId, tenant.ActorName, "secret.revealed", "Secret", id.ToString(), success: value is not null, cancellationToken: ct);
             return value is null ? Results.NotFound() : Results.Ok(new { value });
         });
     }
