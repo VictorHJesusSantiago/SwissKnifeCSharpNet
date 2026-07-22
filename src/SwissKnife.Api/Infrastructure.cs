@@ -1,9 +1,29 @@
 using System.Text.Json;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
 using SwissKnife.Core.Persistence;
 using SwissKnife.Core.Tenancy;
 
 namespace SwissKnife.Api;
+
+/// <summary>Cabeçalhos defensivos aplicados inclusive a respostas de erro e rotas anônimas.</summary>
+public sealed class SecurityHeadersMiddleware(RequestDelegate next)
+{
+    public async Task InvokeAsync(HttpContext context)
+    {
+        context.Response.OnStarting(() =>
+        {
+            var headers = context.Response.Headers;
+            headers.XContentTypeOptions = "nosniff";
+            headers.XFrameOptions = "DENY";
+            headers["Referrer-Policy"] = "no-referrer";
+            headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
+            headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'";
+            return Task.CompletedTask;
+        });
+        await next(context);
+    }
+}
 
 /// <summary>
 /// FND-031 + evolução de API-015/016: resolve a chave enviada em X-Api-Key contra a tabela
@@ -23,9 +43,34 @@ public sealed class ApiKeyMiddleware(RequestDelegate next, IConfiguration config
             return;
         }
 
+        // API-010/012/014: usuários autenticados via login local (JWT Bearer) são uma via
+        // alternativa de identidade além da X-Api-Key de serviço-a-serviço. A validação do
+        // token acontece aqui (via AuthenticateAsync do esquema JwtBearer já registrado),
+        // não por [Authorize] em cada endpoint, para manter um único ponto de resolução de
+        // tenant (FND-031).
+        if (context.Request.Headers.TryGetValue("Authorization", out var authHeader) &&
+            authHeader.ToString().StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        {
+            var result = await context.AuthenticateAsync(Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme);
+            if (!result.Succeeded || result.Principal is null)
+            {
+                await Unauthorized(context, "Token JWT inválido ou expirado.");
+                return;
+            }
+            context.User = result.Principal;
+            var userId = Guid.Parse(result.Principal.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)!.Value);
+            var tenantClaim = result.Principal.FindFirst("tenant")?.Value;
+            var scopesClaim = result.Principal.FindFirst("scopes")?.Value ?? "";
+            var scopes = scopesClaim.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var tenantId = string.IsNullOrEmpty(tenantClaim) ? await EnsureBootstrapTenantAsync(db) : Guid.Parse(tenantClaim);
+            tenantAccessor.Current.Resolve(tenantId, userId, scopes, result.Principal.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Email)?.Value);
+            await next(context);
+            return;
+        }
+
         if (!context.Request.Headers.TryGetValue(LegacyBootstrapKeyHeader, out var supplied) || string.IsNullOrWhiteSpace(supplied))
         {
-            await Unauthorized(context, "X-Api-Key ausente.");
+            await Unauthorized(context, "X-Api-Key ou Authorization Bearer ausente.");
             return;
         }
 
@@ -101,6 +146,24 @@ public sealed class TenantResolutionMiddleware(RequestDelegate next)
     }
 }
 
+/// <summary>Correlaciona todas as requisições com um X-Correlation-Id (recebido ou gerado), propagado nos logs e nas respostas de erro (API-004).</summary>
+public sealed class CorrelationIdMiddleware(RequestDelegate next)
+{
+    public const string HeaderName = "X-Correlation-Id";
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        var correlationId = context.Request.Headers.TryGetValue(HeaderName, out var supplied) && !string.IsNullOrWhiteSpace(supplied)
+            ? supplied.ToString()
+            : Guid.NewGuid().ToString("N");
+
+        context.Items[HeaderName] = correlationId;
+        context.Response.Headers[HeaderName] = correlationId;
+        await next(context);
+    }
+}
+
+/// <summary>API-004: erros padronizados em RFC 9457 Problem Details, sempre com correlation ID.</summary>
 public sealed class ErrorHandlingMiddleware(RequestDelegate next, ILogger<ErrorHandlingMiddleware> logger)
 {
     public async Task InvokeAsync(HttpContext context)
@@ -111,45 +174,87 @@ public sealed class ErrorHandlingMiddleware(RequestDelegate next, ILogger<ErrorH
         }
         catch (ArgumentException exception)
         {
-            context.Response.StatusCode = StatusCodes.Status400BadRequest;
-            await context.Response.WriteAsJsonAsync(new { error = exception.Message });
+            await WriteProblemAsync(context, StatusCodes.Status400BadRequest, "Requisição inválida", exception.Message);
         }
         catch (JsonException exception)
         {
-            context.Response.StatusCode = StatusCodes.Status400BadRequest;
-            await context.Response.WriteAsJsonAsync(new { error = exception.Message });
+            await WriteProblemAsync(context, StatusCodes.Status400BadRequest, "JSON inválido", exception.Message);
         }
         catch (Core.Repositories.ResourceValidationException exception)
         {
-            context.Response.StatusCode = StatusCodes.Status422UnprocessableEntity;
-            await context.Response.WriteAsJsonAsync(new { error = "Payload inválido para o schema do módulo.", details = exception.Errors });
+            await WriteProblemAsync(context, StatusCodes.Status422UnprocessableEntity, "Payload inválido para o schema do módulo",
+                "Um ou mais campos não atendem ao schema do módulo.", new Dictionary<string, object?> { ["errors"] = exception.Errors });
         }
         catch (Core.Repositories.ConcurrencyConflictException exception)
         {
-            context.Response.StatusCode = StatusCodes.Status409Conflict;
-            await context.Response.WriteAsJsonAsync(new { error = exception.Message });
+            await WriteProblemAsync(context, StatusCodes.Status409Conflict, "Conflito de concorrência", exception.Message);
         }
         catch (Core.Repositories.DuplicateResourceNameException exception)
         {
-            context.Response.StatusCode = StatusCodes.Status409Conflict;
-            await context.Response.WriteAsJsonAsync(new { error = exception.Message });
+            await WriteProblemAsync(context, StatusCodes.Status409Conflict, "Nome duplicado", exception.Message);
         }
         catch (Core.Repositories.InvalidStateTransitionException exception)
         {
-            context.Response.StatusCode = StatusCodes.Status400BadRequest;
-            await context.Response.WriteAsJsonAsync(new { error = exception.Message });
+            await WriteProblemAsync(context, StatusCodes.Status400BadRequest, "Transição de estado inválida", exception.Message);
         }
         catch (KeyNotFoundException exception)
         {
-            context.Response.StatusCode = StatusCodes.Status404NotFound;
-            await context.Response.WriteAsJsonAsync(new { error = exception.Message });
+            await WriteProblemAsync(context, StatusCodes.Status404NotFound, "Não encontrado", exception.Message);
         }
         catch (Exception exception)
         {
-            logger.LogError(exception, "Falha não tratada em {Path}", context.Request.Path);
-            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
-            await context.Response.WriteAsJsonAsync(new { error = "Erro interno." });
+            logger.LogError(exception, "Falha não tratada em {Path} (correlationId={CorrelationId})", context.Request.Path, context.Items[CorrelationIdMiddleware.HeaderName]);
+            await WriteProblemAsync(context, StatusCodes.Status500InternalServerError, "Erro interno", "Ocorreu um erro inesperado.");
         }
+    }
+
+    private static async Task WriteProblemAsync(HttpContext context, int statusCode, string title, string detail, Dictionary<string, object?>? extensions = null)
+    {
+        context.Response.StatusCode = statusCode;
+        var problem = new Dictionary<string, object?>
+        {
+            ["type"] = $"https://httpstatuses.com/{statusCode}",
+            ["title"] = title,
+            ["status"] = statusCode,
+            ["detail"] = detail,
+            ["instance"] = context.Request.Path.ToString(),
+            ["correlationId"] = context.Items[CorrelationIdMiddleware.HeaderName]
+        };
+        if (extensions is not null)
+            foreach (var (key, value) in extensions) problem[key] = value;
+
+        await context.Response.WriteAsJsonAsync(problem, options: null, contentType: "application/problem+json");
+    }
+}
+
+/// <summary>API-031: modo de manutenção — quando ativo (config dinâmica "maintenance.enabled"), bloqueia rotas mutáveis não anônimas com 503.</summary>
+public sealed class MaintenanceModeMiddleware(RequestDelegate next)
+{
+    public async Task InvokeAsync(HttpContext context, Core.Configuration.DynamicConfigService config)
+    {
+        if (context.GetEndpoint()?.Metadata.GetMetadata<Microsoft.AspNetCore.Authorization.IAllowAnonymous>() is not null)
+        {
+            await next(context);
+            return;
+        }
+
+        var isMutating = HttpMethods.IsPost(context.Request.Method) || HttpMethods.IsPut(context.Request.Method)
+            || HttpMethods.IsPatch(context.Request.Method) || HttpMethods.IsDelete(context.Request.Method);
+        if (!isMutating)
+        {
+            await next(context);
+            return;
+        }
+
+        var maintenance = await config.GetAsync("maintenance.enabled", null);
+        if (maintenance == "true")
+        {
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            await context.Response.WriteAsJsonAsync(new { error = "A plataforma está em modo de manutenção. Tente novamente em instantes." });
+            return;
+        }
+
+        await next(context);
     }
 }
 
