@@ -14,6 +14,7 @@ namespace SwissKnife.Core.Schema;
 public static class ModuleSchemaRegistry
 {
     private static readonly ConcurrentDictionary<string, JsonSchema> Cache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly ConcurrentDictionary<string, string> TextCache = new(StringComparer.OrdinalIgnoreCase);
 
     private static readonly JsonSchema Permissive = new JsonSchemaBuilder().Type(SchemaValueType.Object);
 
@@ -22,17 +23,26 @@ public static class ModuleSchemaRegistry
         return Cache.GetOrAdd(moduleId, LoadSchema);
     }
 
-    private static JsonSchema LoadSchema(string moduleId)
+    public static string GetSchemaText(string moduleId)
+    {
+        if (!ModuleCatalog.Exists(moduleId))
+            throw new KeyNotFoundException($"Módulo desconhecido: {moduleId}.");
+        return TextCache.GetOrAdd(moduleId, LoadSchemaText);
+    }
+
+    private static JsonSchema LoadSchema(string moduleId) => JsonSchema.FromText(LoadSchemaText(moduleId));
+
+    private static string LoadSchemaText(string moduleId)
     {
         var assembly = typeof(ModuleSchemaRegistry).Assembly;
         var resourceName = assembly.GetManifestResourceNames()
             .FirstOrDefault(x => x.EndsWith($"ModuleSchemas.{moduleId}.schema.json", StringComparison.OrdinalIgnoreCase));
-        if (resourceName is null) return Permissive;
+        if (resourceName is null)
+            return """{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object"}""";
 
         using var stream = assembly.GetManifestResourceStream(resourceName)!;
         using var reader = new StreamReader(stream);
-        var json = reader.ReadToEnd();
-        return JsonSchema.FromText(json);
+        return reader.ReadToEnd();
     }
 
     public static IReadOnlyList<string> Validate(string moduleId, string payloadJson)
