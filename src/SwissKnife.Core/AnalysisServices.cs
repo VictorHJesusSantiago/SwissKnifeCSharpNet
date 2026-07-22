@@ -161,6 +161,8 @@ public static partial class AnalysisServices
     public static IssuedCertificate IssueCertificate(CertificateIssueRequest request)
     {
         if (string.IsNullOrWhiteSpace(request.CommonName)) throw new ArgumentException("CommonName obrigatório.");
+        if (request.Profile is not ("server" or "client" or "mtls" or "code-signing"))
+            throw new ArgumentException("Profile deve ser server, client, mtls ou code-signing.");
         using var key = RSA.Create(2048);
         var certificateRequest = new CertificateRequest(
             $"CN={request.CommonName.Trim()}",
@@ -170,6 +172,28 @@ public static partial class AnalysisServices
         certificateRequest.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
         certificateRequest.CertificateExtensions.Add(new X509KeyUsageExtension(
             X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, true));
+        var enhancedKeyUsages = new OidCollection();
+        if (request.Profile is "server" or "mtls")
+            enhancedKeyUsages.Add(new Oid("1.3.6.1.5.5.7.3.1", "Server Authentication"));
+        if (request.Profile is "client" or "mtls")
+            enhancedKeyUsages.Add(new Oid("1.3.6.1.5.5.7.3.2", "Client Authentication"));
+        if (request.Profile == "code-signing")
+            enhancedKeyUsages.Add(new Oid("1.3.6.1.5.5.7.3.3", "Code Signing"));
+        certificateRequest.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(enhancedKeyUsages, true));
+        var san = new SubjectAlternativeNameBuilder();
+        foreach (var dns in request.DnsNames ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(dns) || dns.Length > 253) throw new ArgumentException($"SAN DNS inválido: {dns}.");
+            san.AddDnsName(dns);
+        }
+        foreach (var ip in request.IpAddresses ?? [])
+        {
+            if (!System.Net.IPAddress.TryParse(ip, out var address)) throw new ArgumentException($"SAN IP inválido: {ip}.");
+            san.AddIpAddress(address);
+        }
+        if ((request.DnsNames?.Count ?? 0) > 0 || (request.IpAddresses?.Count ?? 0) > 0)
+            certificateRequest.CertificateExtensions.Add(san.Build());
+        certificateRequest.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(certificateRequest.PublicKey, false));
         var notAfter = DateTimeOffset.UtcNow.AddDays(Math.Clamp(request.ValidDays, 1, 825));
         using var certificate = certificateRequest.CreateSelfSigned(DateTimeOffset.UtcNow.AddMinutes(-5), notAfter);
         return new(certificate.SerialNumber, request.CommonName, notAfter, certificate.ExportCertificatePem());
