@@ -3,7 +3,7 @@
 Plataforma modular que reúne operações de identidade, infraestrutura, banco de
 dados, suporte e engenharia em uma solução .NET 10. O projeto oferece:
 
-- API ASP.NET Core autenticada, com rate limiting e persistência JSON;
+- API ASP.NET Core autenticada, com rate limiting e persistência relacional via EF Core;
 - CLI baseada em `System.CommandLine`;
 - aplicativo .NET MAUI para snippets;
 - núcleo compartilhado com catálogo, regras de negócio e adaptadores locais.
@@ -34,11 +34,26 @@ especializadas:
 | PKI | `POST /api/pki/certificates` e `POST /api/pki/certificates/{serial}/revoke` |
 | Profiler .NET | `GET /api/dotnet/profiler/snapshot` |
 | Logs | `POST /api/logs` e `GET /api/logs` |
+| VPN | `POST /api/operations/vpn/audit` |
+| Multi-cloud | `POST /api/operations/cloud/audit` |
+| API Gateway | `POST /api/operations/gateway/validate` e `select-upstream` |
+| Webhooks | `POST /api/operations/webhooks/validate`, `sign` e `verify` |
+| Ambientes efêmeros | `POST /api/operations/ephemeral-environments/plan` |
+| Capacidade | `POST /api/operations/capacity/analyze` |
+| On-call | `POST /api/operations/on-call/schedule` |
+| Self-service | `POST /api/operations/self-service/evaluate` |
+| Disaster recovery | `POST /api/operations/disaster-recovery/assess` |
+| ITAM | `POST /api/operations/itam/financials` |
+| Licenças | `POST /api/operations/licenses/reconcile` |
+| Logs estruturados | `POST /api/operations/logs/validate-batch` |
 
-Tickets, VPN, webhooks, ambientes efêmeros, capacidade, on-call, self-service,
-disaster recovery, ITAM, licenças, gateway e inventário multi-cloud usam o
-recurso uniforme. Seus dados específicos são enviados no objeto `data`, sem
-perder isolamento por `tenant`.
+Além das operações tipadas, todos os módulos usam recursos versionados com
+isolamento por tenant, ETag, histórico, exclusão lógica, anexos, comentários,
+relacionamentos, tags, importação/exportação e jobs assíncronos.
+Todos os 22 módulos publicam JSON Schema em
+`GET /api/modules/{module}/schema`. Uma análise operacional pode ser executada e
+gravada atomicamente por `POST /api/operations/executions`; o registro resultante
+mantém entrada, resultado, findings, histórico e evento de outbox.
 
 ## Executar
 
@@ -79,6 +94,9 @@ dotnet run --project src/SwissKnife.Cli -- resource add --module itam --name not
 dotnet run --project src/SwissKnife.Cli -- cloud list --provider azure
 dotnet run --project src/SwissKnife.Cli -- k8s manifest --name orders --image registry/orders:1.2
 dotnet run --project src/SwissKnife.Cli -- db analyze --sql "select * from orders where customer_id = 10" --duration-ms 1200
+dotnet run --project src/SwissKnife.Cli -- operations list
+dotnet run --project src/SwissKnife.Cli -- operations run --operation vpn-audit --file vpn-audit.json --api-key "..."
+dotnet run --project src/SwissKnife.Cli -- operations run --operation dr-assess --file dr.json --persist --name dr-billing-2026 --api-key "..."
 ```
 
 Desktop:
@@ -89,10 +107,10 @@ dotnet run --project src/SwissKnife.Desktop -f net10.0-windows10.0.19041.0
 
 ## Configuração e segurança
 
-`SwissKnife:DataDirectory`, `SwissKnife:ApiKey` e
+`SwissKnife:DataDirectory`, `SwissKnife:ApiKey`, `SwissKnife:Database:Provider` e
 `SwissKnife:RequestsPerMinute` podem ser configurados no `appsettings.json` ou
-por variáveis de ambiente. Arquivos de dados são gravados atomicamente em JSON;
-logs usam NDJSON.
+por variáveis de ambiente. SQLite é o provider padrão; PostgreSQL e SQL Server
+também são suportados. Logs locais usam NDJSON.
 
 Os adaptadores incluídos são locais e seguros: não alteram AD, Azure, clusters,
 VPNs, clouds ou bancos reais. Para produção, conecte provedores de infraestrutura
