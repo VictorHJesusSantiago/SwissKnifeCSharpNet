@@ -131,4 +131,39 @@ public sealed class ResourceRepositoryTests
         var restored = await repository.RestoreVersionAsync(created.Id, 1);
         Assert.Contains("low", restored.PayloadJson);
     }
+
+    [Fact]
+    public async Task Resource_limits_reject_invalid_metadata()
+    {
+        using var database = new TestDatabase();
+        database.SetTenant(Guid.NewGuid());
+        await using var db = database.CreateContext();
+        var repository = new ResourceRepository(db, database.TenantAccessor);
+
+        await Assert.ThrowsAsync<ResourceValidationException>(() => repository.CreateAsync(
+            new("snippets", new string('x', 201), "status inválido!", "{}", ["ok"])));
+        await Assert.ThrowsAsync<ResourceValidationException>(() => repository.CreateAsync(
+            new("snippets", "nome", "active", "{}", Enumerable.Range(0, 51).Select(x => $"t{x}").ToArray())));
+        await Assert.ThrowsAsync<ResourceValidationException>(() => repository.CreateAsync(
+            new("snippets", "nome", "active", "{}", [new string('x', 65)])));
+    }
+
+    [Fact]
+    public async Task Tags_and_metadata_are_normalized_and_update_cannot_duplicate_name()
+    {
+        using var database = new TestDatabase();
+        database.SetTenant(Guid.NewGuid());
+        await using var db = database.CreateContext();
+        var repository = new ResourceRepository(db, database.TenantAccessor);
+        var first = await repository.CreateAsync(new("SNIPPETS", "primeiro", "ACTIVE", "{}",
+            [" CSharp ", "csharp", " API "], CostCenter: " CC-1 "));
+        var second = await repository.CreateAsync(new("snippets", "segundo", "active", "{}"));
+
+        Assert.Equal("snippets", first.Module);
+        Assert.Equal("active", first.Status);
+        Assert.Equal("CC-1", first.CostCenter);
+        Assert.Equal(["api", "csharp"], first.Tags.Select(x => x.Tag));
+        await Assert.ThrowsAsync<DuplicateResourceNameException>(() => repository.UpdateAsync(second.Id,
+            new("primeiro", "active", "{}", second.ConcurrencyStamp)));
+    }
 }
