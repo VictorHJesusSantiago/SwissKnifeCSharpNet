@@ -76,6 +76,102 @@ public sealed class ResourceEndpointsTests : IClassFixture<ApiTestFactory>
     }
 
     [Fact]
+    public async Task Schema_is_published_and_http_preconditions_are_enforced()
+    {
+        using var client = CreateClient();
+        var schemaResponse = await client.GetAsync("/api/modules/tickets/schema");
+        Assert.Equal(HttpStatusCode.OK, schemaResponse.StatusCode);
+        Assert.Equal("application/schema+json", schemaResponse.Content.Headers.ContentType?.MediaType);
+
+        var create = await client.PostAsJsonAsync("/api/resources", new
+        {
+            Module = "snippets", Name = $"etag-{Guid.NewGuid():N}", Status = "active"
+        });
+        var id = JsonDocument.Parse(await create.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetGuid();
+        var get = await client.GetAsync($"/api/resources/{id}");
+        var etag = get.Headers.ETag!;
+
+        using var conditionalGet = new HttpRequestMessage(HttpMethod.Get, $"/api/resources/{id}");
+        conditionalGet.Headers.IfNoneMatch.Add(etag);
+        Assert.Equal(HttpStatusCode.NotModified, (await client.SendAsync(conditionalGet)).StatusCode);
+
+        var missingPrecondition = await client.PutAsJsonAsync($"/api/resources/{id}",
+            new { Module = "snippets", Name = "alterado", Status = "active" });
+        Assert.Equal((HttpStatusCode)428, missingPrecondition.StatusCode);
+
+        using var update = new HttpRequestMessage(HttpMethod.Put, $"/api/resources/{id}")
+        {
+            Content = JsonContent.Create(new { Module = "snippets", Name = "alterado", Status = "active" })
+        };
+        update.Headers.IfMatch.Add(etag);
+        var updated = await client.SendAsync(update);
+        Assert.Equal(HttpStatusCode.OK, updated.StatusCode);
+        Assert.NotNull(updated.Headers.ETag);
+    }
+
+    [Fact]
+    public async Task Import_preview_import_report_export_and_batch_operations_work_end_to_end()
+    {
+        using var client = CreateClient();
+        var unique = Guid.NewGuid().ToString("N");
+        var json = JsonSerializer.Serialize(new[]
+        {
+            new
+            {
+                name = $"import-{unique}", status = "active", externalKey = $"ext-{unique}",
+                data = new { language = "csharp" }
+            }
+        });
+
+        using var previewContent = new StringContent(json, Encoding.UTF8, "application/json");
+        var preview = await client.PostAsync("/api/imports/preview?module=snippets&format=Json", previewContent);
+        Assert.Equal(HttpStatusCode.OK, preview.StatusCode);
+        var previewJson = JsonDocument.Parse(await preview.Content.ReadAsStringAsync()).RootElement;
+        Assert.Equal(1, previewJson.GetProperty("validRows").GetInt32());
+
+        using var importContent = new StringContent(json, Encoding.UTF8, "application/json");
+        var import = await client.PostAsync("/api/imports?module=snippets&format=Json", importContent);
+        Assert.Equal(HttpStatusCode.Created, import.StatusCode);
+        var jobId = JsonDocument.Parse(await import.Content.ReadAsStringAsync()).RootElement.GetProperty("id").GetGuid();
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/api/imports/{jobId}")).StatusCode);
+
+        var export = await client.GetAsync("/api/exports?module=snippets&format=Json");
+        Assert.Equal(HttpStatusCode.OK, export.StatusCode);
+        Assert.Contains($"import-{unique}", await export.Content.ReadAsStringAsync());
+
+        var batch = await client.PostAsJsonAsync("/api/resources/batch", new object[]
+        {
+            new { Module = "snippets", Name = $"batch-{unique}", Status = "active" },
+            new { Module = "modulo-inexistente", Name = "invalido", Status = "active" }
+        });
+        Assert.Equal(HttpStatusCode.OK, batch.StatusCode);
+        var batchJson = JsonDocument.Parse(await batch.Content.ReadAsStringAsync()).RootElement;
+        Assert.Equal(1, batchJson.GetProperty("succeeded").GetInt32());
+        Assert.Equal(1, batchJson.GetProperty("failed").GetInt32());
+        var createdId = batchJson.GetProperty("items")[0].GetProperty("id").GetGuid();
+
+        var delete = await client.PostAsJsonAsync("/api/resources/batch-delete",
+            new[] { new { Id = createdId }, new { Id = Guid.NewGuid() } });
+        var deleteJson = JsonDocument.Parse(await delete.Content.ReadAsStringAsync()).RootElement;
+        Assert.Equal(1, deleteJson.GetProperty("succeeded").GetInt32());
+        Assert.Equal(1, deleteJson.GetProperty("failed").GetInt32());
+    }
+
+    [Fact]
+    public async Task Responses_have_security_headers_and_create_returns_etag()
+    {
+        using var client = CreateClient();
+        var health = await client.GetAsync("/health");
+        Assert.Equal("nosniff", health.Headers.GetValues("X-Content-Type-Options").Single());
+        Assert.Equal("DENY", health.Headers.GetValues("X-Frame-Options").Single());
+
+        var create = await client.PostAsJsonAsync("/api/resources",
+            new { Module = "snippets", Name = $"headers-{Guid.NewGuid():N}", Status = "active" });
+        Assert.Equal(HttpStatusCode.Created, create.StatusCode);
+        Assert.NotNull(create.Headers.ETag);
+    }
+
+    [Fact]
     public async Task Idempotency_key_replays_the_same_response_instead_of_creating_twice()
     {
         using var client = CreateClient();
