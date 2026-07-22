@@ -49,6 +49,7 @@ public sealed class ResourceRepository(SwissKnifeDbContext db, TenantContextAcce
 
     public async Task<Resource> CreateAsync(CreateResourceCommand command, CancellationToken cancellationToken = default)
     {
+        ValidateCommon(command.Name, command.Status, command.PayloadJson, command.Tags, command.CostCenter);
         if (!ModuleCatalog.Exists(command.Module))
             throw new ArgumentException($"Módulo desconhecido: {command.Module}.");
         if (string.IsNullOrWhiteSpace(command.Name))
@@ -58,22 +59,22 @@ public sealed class ResourceRepository(SwissKnifeDbContext db, TenantContextAcce
         if (errors.Count > 0) throw new ResourceValidationException(errors);
 
         var duplicate = await db.Resources.AnyAsync(
-            x => x.TenantId == TenantId && x.Module == command.Module && x.Name == command.Name.Trim(),
+            x => x.TenantId == TenantId && x.Module == command.Module.Trim().ToLowerInvariant() && x.Name == command.Name.Trim(),
             cancellationToken);
         if (duplicate) throw new DuplicateResourceNameException(command.Module, command.Name);
 
         var resource = new Resource
         {
             TenantId = TenantId,
-            Module = command.Module,
+            Module = command.Module.Trim().ToLowerInvariant(),
             Name = command.Name.Trim(),
-            Status = string.IsNullOrWhiteSpace(command.Status) ? "active" : command.Status,
+            Status = command.Status.Trim().ToLowerInvariant(),
             PayloadJson = command.PayloadJson,
             OwnerUserId = command.OwnerUserId,
             TeamOrgUnitId = command.TeamOrgUnitId,
-            CostCenter = command.CostCenter
+            CostCenter = command.CostCenter?.Trim()
         };
-        foreach (var tag in (command.Tags ?? []).Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var tag in NormalizeTags(command.Tags))
             resource.Tags.Add(new ResourceTag { ResourceId = resource.Id, Tag = tag });
 
         db.Resources.Add(resource);
@@ -83,6 +84,7 @@ public sealed class ResourceRepository(SwissKnifeDbContext db, TenantContextAcce
 
     public async Task<Resource> UpdateAsync(Guid id, UpdateResourceCommand command, CancellationToken cancellationToken = default)
     {
+        ValidateCommon(command.Name, command.Status, command.PayloadJson, command.Tags, command.CostCenter);
         var resource = await db.Resources.Include(x => x.Tags)
             .FirstOrDefaultAsync(x => x.Id == id && x.TenantId == TenantId, cancellationToken)
             ?? throw new KeyNotFoundException($"Recurso {id} não encontrado.");
@@ -91,26 +93,53 @@ public sealed class ResourceRepository(SwissKnifeDbContext db, TenantContextAcce
             throw new ConcurrencyConflictException(
                 "O recurso foi alterado por outra requisição desde a última leitura (ETag divergente).");
 
+        var duplicate = await db.Resources.AnyAsync(x => x.TenantId == TenantId
+            && x.Module == resource.Module && x.Name == command.Name.Trim() && x.Id != id, cancellationToken);
+        if (duplicate) throw new DuplicateResourceNameException(resource.Module, command.Name);
+
         var errors = ModuleSchemaRegistry.Validate(resource.Module, command.PayloadJson);
         if (errors.Count > 0) throw new ResourceValidationException(errors);
 
-        if (!string.Equals(resource.Status, command.Status, StringComparison.Ordinal))
-            await EnsureValidTransitionAsync(resource.Module, resource.Status, command.Status, cancellationToken);
+        var normalizedStatus = command.Status.Trim().ToLowerInvariant();
+        if (!string.Equals(resource.Status, normalizedStatus, StringComparison.Ordinal))
+            await EnsureValidTransitionAsync(resource.Module, resource.Status, normalizedStatus, cancellationToken);
 
         resource.Name = command.Name.Trim();
-        resource.Status = command.Status;
+        resource.Status = command.Status.Trim().ToLowerInvariant();
         resource.PayloadJson = command.PayloadJson;
         resource.OwnerUserId = command.OwnerUserId;
-        resource.CostCenter = command.CostCenter;
+        resource.CostCenter = command.CostCenter?.Trim();
 
         db.ResourceTags.RemoveRange(resource.Tags);
         resource.Tags.Clear();
-        foreach (var tag in (command.Tags ?? []).Distinct(StringComparer.OrdinalIgnoreCase))
+        foreach (var tag in NormalizeTags(command.Tags))
             resource.Tags.Add(new ResourceTag { ResourceId = resource.Id, Tag = tag });
 
         await db.SaveChangesAsync(cancellationToken);
         return resource;
     }
+
+    private static void ValidateCommon(string name, string status, string payloadJson,
+        IReadOnlyList<string>? tags, string? costCenter)
+    {
+        var errors = new List<string>();
+        if (string.IsNullOrWhiteSpace(name)) errors.Add("Nome é obrigatório.");
+        else if (name.Trim().Length > 200) errors.Add("Nome deve ter no máximo 200 caracteres.");
+        if (string.IsNullOrWhiteSpace(status)) errors.Add("Status é obrigatório.");
+        else if (status.Trim().Length > 50) errors.Add("Status deve ter no máximo 50 caracteres.");
+        else if (!status.Trim().All(c => char.IsLetterOrDigit(c) || c is '-' or '_'))
+            errors.Add("Status aceita apenas letras, números, hífen e sublinhado.");
+        if (Encoding.UTF8.GetByteCount(payloadJson) > 1_048_576) errors.Add("Payload deve ter no máximo 1 MiB.");
+        if (costCenter?.Trim().Length > 100) errors.Add("Centro de custo deve ter no máximo 100 caracteres.");
+        if (tags?.Count > 50) errors.Add("São permitidas no máximo 50 tags.");
+        if (tags?.Any(string.IsNullOrWhiteSpace) == true) errors.Add("Tags vazias não são permitidas.");
+        if (tags?.Any(x => x.Trim().Length > 64) == true) errors.Add("Cada tag deve ter no máximo 64 caracteres.");
+        if (errors.Count > 0) throw new ResourceValidationException(errors);
+    }
+
+    private static string[] NormalizeTags(IReadOnlyList<string>? tags) =>
+        (tags ?? []).Select(x => x.Trim().ToLowerInvariant())
+        .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.Ordinal).ToArray();
 
     private async Task EnsureValidTransitionAsync(string module, string from, string to, CancellationToken cancellationToken)
     {
