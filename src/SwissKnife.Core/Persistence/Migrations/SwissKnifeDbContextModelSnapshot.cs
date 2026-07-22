@@ -62,6 +62,47 @@ namespace SwissKnife.Core.Persistence.Migrations
                     b.ToTable("ApiKeys");
                 });
 
+            modelBuilder.Entity("SwissKnife.Core.Entities.AuditLogEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActorName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DetailsJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IpAddress")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("OccurredAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("Success")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("TargetId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TargetType")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("TenantId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "OccurredAt");
+
+                    b.ToTable("AuditLogEntries");
+                });
+
             modelBuilder.Entity("SwissKnife.Core.Entities.BackupRecord", b =>
                 {
                     b.Property<Guid>("Id")
@@ -133,6 +174,183 @@ namespace SwissKnife.Core.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("CustomFieldValues");
+                });
+
+            modelBuilder.Entity("SwissKnife.Core.Entities.DynamicConfigEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("TenantId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("UpdatedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("UpdatedBy")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Key", "TenantId")
+                        .IsUnique();
+
+                    b.ToTable("DynamicConfigs");
+                });
+
+            modelBuilder.Entity("SwissKnife.Core.Entities.DynamicConfigHistoryEntry", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("ChangedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ChangedBy")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("TenantId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("DynamicConfigHistory");
+                });
+
+            modelBuilder.Entity("SwissKnife.Core.Entities.FeatureFlagEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Environment")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("TenantId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("UpdatedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("UpdatedBy")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Key", "TenantId", "Environment")
+                        .IsUnique();
+
+                    b.ToTable("FeatureFlags");
+                });
+
+            modelBuilder.Entity("SwissKnife.Core.Entities.FindingEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("DecisionExpiresAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("DecisionReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EvidenceJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Fingerprint")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("FirstSeenAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("LastSeenAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid?>("LinkedTicketId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Module")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("OccurrenceCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Owner")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("ResolvedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ResolvedBy")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ResourceId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Severity")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Fingerprint")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "Module", "Status", "Severity");
+
+                    b.ToTable("Findings");
                 });
 
             modelBuilder.Entity("SwissKnife.Core.Entities.IdempotencyKeyEntity", b =>
@@ -352,6 +570,42 @@ namespace SwissKnife.Core.Persistence.Migrations
                     b.HasIndex("ProcessedAt");
 
                     b.ToTable("OutboxMessages");
+                });
+
+            modelBuilder.Entity("SwissKnife.Core.Entities.RefreshTokenEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("CreatedByIp")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("ExpiresAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid?>("ReplacedByTokenId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("RevokedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("TokenHash")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique();
+
+                    b.ToTable("RefreshTokens");
                 });
 
             modelBuilder.Entity("SwissKnife.Core.Entities.Resource", b =>
@@ -776,6 +1030,40 @@ namespace SwissKnife.Core.Persistence.Migrations
                     b.ToTable("SecretReferences");
                 });
 
+            modelBuilder.Entity("SwissKnife.Core.Entities.TemporaryElevationEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ApprovedBy")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("ExpiresAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("GrantedScope")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Justification")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("RevokedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("TemporaryElevations");
+                });
+
             modelBuilder.Entity("SwissKnife.Core.Entities.Tenant", b =>
                 {
                     b.Property<Guid>("Id")
@@ -871,6 +1159,231 @@ namespace SwissKnife.Core.Persistence.Migrations
                     b.ToTable("TenantSettings");
                 });
 
+            modelBuilder.Entity("SwissKnife.Core.Entities.TicketComment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AuthorName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsInternal")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("TicketId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("TicketComments");
+                });
+
+            modelBuilder.Entity("SwissKnife.Core.Entities.TicketEntity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("AssigneeUserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Category")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("ClosedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ConcurrencyStamp")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("CreatedBy")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("FirstRespondedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Impact")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Priority")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ReopenedCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("RequesterEmail")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("ResolutionDueAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("ResolvedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("ResponseDueAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("SlaPaused")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("SlaResolutionBreached")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("SlaResponseBreached")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Subcategory")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("TeamOrgUnitId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("UpdatedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("UpdatedBy")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Urgency")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Number")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "ResolutionDueAt");
+
+                    b.HasIndex("TenantId", "ResponseDueAt");
+
+                    b.HasIndex("TenantId", "Status");
+
+                    b.ToTable("Tickets");
+                });
+
+            modelBuilder.Entity("SwissKnife.Core.Entities.TicketNumberSequence", b =>
+                {
+                    b.Property<Guid>("TenantId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("LastNumber")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("TenantId");
+
+                    b.ToTable("TicketNumberSequences");
+                });
+
+            modelBuilder.Entity("SwissKnife.Core.Entities.TicketRelationship", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("SourceTicketId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("TargetTicketId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SourceTicketId", "TargetTicketId", "Type")
+                        .IsUnique();
+
+                    b.ToTable("TicketRelationships");
+                });
+
+            modelBuilder.Entity("SwissKnife.Core.Entities.TicketSlaPolicy", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Priority")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ResolutionMinutes")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ResponseMinutes")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid?>("TenantId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Priority")
+                        .IsUnique();
+
+                    b.ToTable("TicketSlaPolicies");
+                });
+
+            modelBuilder.Entity("SwissKnife.Core.Entities.TicketWatcher", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("TicketId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TicketId");
+
+                    b.ToTable("TicketWatchers");
+                });
+
             modelBuilder.Entity("SwissKnife.Core.Entities.UserEntity", b =>
                 {
                     b.Property<Guid>("Id")
@@ -887,13 +1400,41 @@ namespace SwissKnife.Core.Persistence.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("FailedLoginAttempts")
+                        .HasColumnType("INTEGER");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("INTEGER");
+
+                    b.Property<long?>("LockedUntil")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("MfaEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("MfaRecoveryCodesProtected")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MfaSecretProtected")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("PasswordChangedAt")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("PasswordHash")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Scopes")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
 
                     b.Property<Guid?>("TenantId")
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("Email")
+                        .IsUnique();
 
                     b.ToTable("Users");
                 });
@@ -925,6 +1466,15 @@ namespace SwissKnife.Core.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("SwissKnife.Core.Entities.TicketWatcher", b =>
+                {
+                    b.HasOne("SwissKnife.Core.Entities.TicketEntity", null)
+                        .WithMany("Watchers")
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("SwissKnife.Core.Entities.Resource", b =>
                 {
                     b.Navigation("Tags");
@@ -935,6 +1485,11 @@ namespace SwissKnife.Core.Persistence.Migrations
                     b.Navigation("Limits");
 
                     b.Navigation("Settings");
+                });
+
+            modelBuilder.Entity("SwissKnife.Core.Entities.TicketEntity", b =>
+                {
+                    b.Navigation("Watchers");
                 });
 #pragma warning restore 612, 618
         }
