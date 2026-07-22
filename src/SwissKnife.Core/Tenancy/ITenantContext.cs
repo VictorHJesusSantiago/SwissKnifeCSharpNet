@@ -7,7 +7,10 @@ namespace SwissKnife.Core.Tenancy;
 public interface ITenantContext
 {
     Guid TenantId { get; }
-    Guid? ApiKeyId { get; }
+
+    /// <summary>Id do principal autenticado: o Id da ApiKeyEntity (chaves de serviço) OU o
+    /// Id do UserEntity (sessão JWT) — o esquema de autenticação usado determina qual.</summary>
+    Guid? PrincipalId { get; }
     IReadOnlyList<string> Scopes { get; }
     string? ActorName { get; }
     bool IsPlatformAdmin { get; }
@@ -19,17 +22,17 @@ public sealed class TenantContext : ITenantContext
     public static readonly TenantContext Unresolved = new();
 
     public Guid TenantId { get; private set; }
-    public Guid? ApiKeyId { get; private set; }
+    public Guid? PrincipalId { get; private set; }
     public IReadOnlyList<string> Scopes { get; private set; } = [];
     public string? ActorName { get; private set; }
     public bool IsPlatformAdmin => Scopes.Contains("*") || Scopes.Contains("platform:admin");
 
     public bool HasScope(string scope) => Scopes.Contains("*") || Scopes.Contains(scope);
 
-    public void Resolve(Guid tenantId, Guid apiKeyId, IReadOnlyList<string> scopes, string? actorName)
+    public void Resolve(Guid tenantId, Guid principalId, IReadOnlyList<string> scopes, string? actorName)
     {
         TenantId = tenantId;
-        ApiKeyId = apiKeyId;
+        PrincipalId = principalId;
         Scopes = scopes;
         ActorName = actorName;
     }
