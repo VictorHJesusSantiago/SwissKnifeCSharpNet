@@ -3,9 +3,13 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using SwissKnife.Core.Auditing;
+using SwissKnife.Core.Auth;
 using SwissKnife.Core.Backup;
+using SwissKnife.Core.Configuration;
 using SwissKnife.Core.Eventing;
 using SwissKnife.Core.ImportExport;
+using SwissKnife.Core.Findings;
 using SwissKnife.Core.Idempotency;
 using SwissKnife.Core.Jobs;
 using SwissKnife.Core.Persistence;
@@ -13,6 +17,7 @@ using SwissKnife.Core.Repositories;
 using SwissKnife.Core.Search;
 using SwissKnife.Core.Security;
 using SwissKnife.Core.Tenancy;
+using SwissKnife.Core.Tickets;
 
 namespace SwissKnife.Core;
 
@@ -82,6 +87,19 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => (JobDispatcherHostedService)sp.GetServices<IHostedService>().First(x => x is JobDispatcherHostedService));
         services.AddHostedService<ScheduledJobRunnerHostedService>();
         services.AddHostedService<RetentionSweepHostedService>();
+
+        services.AddScoped<AuditLogger>();
+        services.AddSingleton<JwtTokenService>();
+        services.AddSingleton<TotpService>();
+        services.AddScoped<AuthService>();
+        services.AddScoped<ElevationService>();
+        services.AddScoped<FeatureFlagService>();
+        services.AddScoped<DynamicConfigService>();
+        services.AddSingleton(TimeProvider.System);
+        services.AddScoped<FindingService>();
+
+        services.AddScoped<TicketService>();
+        services.AddHostedService<TicketSlaMonitorHostedService>();
 
         return services;
     }
